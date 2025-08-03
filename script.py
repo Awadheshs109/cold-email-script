@@ -1,5 +1,7 @@
-import smtplib
 import os
+import smtplib
+import time
+import random
 import pandas as pd
 from dotenv import load_dotenv
 from email.mime.multipart import MIMEMultipart
@@ -7,33 +9,31 @@ from email.mime.text import MIMEText
 
 load_dotenv()
 
-# Email Configuration
+# Email config
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-RESUME_LINK = "https://drive.google.com/file/d/17fpc_EwLpJCKKFGPfzZiHuOamPHaILri/view?usp=sharing"  # Replace with your actual link
+RESUME_LINK = "https://drive.google.com/file/d/17fpc_EwLpJCKKFGPfzZiHuOamPHaILri/view?usp=sharing"
 
-# List to track failed emails
-failed_log = []
+# Error log path
+LOG_FILE = "error_log.txt"
 
+# Function to send email
 def send_confirmation_email(email, company, name):
-    """Sends confirmation email with resume link in body."""
     subject = f"Regarding Job Opportunity at {company}"
-
     body = f"""\
 Hi {name},<br><br>
 
 I hope you're doing well.
-I’m reaching out to express my interest in a <strong>Frontend Developer</strong> position at <strong>{company}</strong>.<br>
-With over 3 years of experience in Angular, I’ve built scalable web applications using:
+I’m reaching out to express my interest in the <strong>Frontend Angular Developer</strong> position at <strong>{company}</strong>.<br>
+With over 3.5 years of experience in Angular, I have built scalable web applications using:
 <ul>
-  <li><strong>Angular (v13+)</strong> with standalone components</li>
+  <li><strong>Angular (v13)</strong> with standalone components</li>
   <li><strong>Reactive Forms</strong> for dynamic form control</li>
   <li><strong>NgRx</strong> for advanced state management</li>
   <li><strong>DevExtreme</strong>, <strong>Highcharts</strong>, and <strong>Power BI</strong> for dynamic dashboards</li>
 </ul>
-
 
 <a href="{RESUME_LINK}" style="display:none;" target="_blank">View My Resume</a>
 <p>I’ve attached my resume and would welcome the opportunity to discuss how my technical skills and problem-solving mindset can contribute to your team.</p>
@@ -59,8 +59,6 @@ With over 3 years of experience in Angular, I’ve built scalable web applicatio
   </a>
 </div>
 """
-
-
     try:
         msg = MIMEMultipart()
         msg["From"] = EMAIL_SENDER
@@ -74,41 +72,63 @@ With over 3 years of experience in Angular, I’ve built scalable web applicatio
             server.send_message(msg)
 
         print(f"✅ Email sent to {name} at {company} ({email})")
+        return True
 
     except Exception as e:
-        print(f"❌ Failed to send email to {name} at {company} ({email})")
-        print(f"   Error: {e}")
-        failed_log.append({
-            "Name": name,
-            "Email": email,
-            "Company": company,
-            "Error": str(e)
-        })
+        error_msg = f"❌ Failed to send email to {name} ({email}) - {e}\n"
+        print(error_msg)
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(error_msg)
+        return False
 
 def run_app():
-    try:
-        # Read CSV with unknown extra columns
-        df = pd.read_csv("Hr-detail.csv", header=0, engine='python')
-    except FileNotFoundError:
-        print("❌ 'Hr-detail.csv' not found.")
+    file_path = "HR-Database.xlsx"
+    if not os.path.exists(file_path):
+        print(f"❌ '{file_path}' not found.")
         return
 
-    for index, row in df.iterrows():
+    print("📄 Reading contacts from Excel...")
+    df_all = pd.read_excel(file_path)
+
+    # Add 'Email Sent' column if not exists
+    if 'Email Sent' not in df_all.columns:
+        df_all['Email Sent'] = ""
+
+    # Work only on rows 101 to 400 (index 100 to 399)
+    df_slice = df_all.iloc[0:250].copy()
+
+    # Drop rows in the slice that don't have required fields
+    df_slice = df_slice.dropna(subset=["Email", "Name", "Company"])
+
+    print(f"📧 Sending emails to rows 0–250 ({len(df_slice)} contacts)...")
+
+    for i in df_slice.index:
+        row = df_all.loc[i]
         name = str(row.get("Name", "")).strip()
         email = str(row.get("Email", "")).strip()
         company = str(row.get("Company", "")).strip()
+        already_sent = str(row.get("Email Sent", "")).strip().lower()
 
-        if not email or not name or not company or "@" not in email:
-            print(f"⚠️ Skipping incomplete row {index + 2}")
+        if already_sent == "yes":
+            print(f"⏭️ Skipping {name} ({email}) — already sent.")
             continue
 
-        send_confirmation_email(email, company, name)
+        if not email or not name or not company or "@" not in email:
+            print(f"⚠️ Skipping invalid row {i + 1}")
+            df_all.at[i, "Email Sent"] = "No"
+            continue
 
-    if failed_log:
-        print(f"\n❗ {len(failed_log)} email(s) failed. Logging to failed_emails.csv")
-        pd.DataFrame(failed_log).to_csv("failed_emails.csv", index=False)
-    else:
-        print("\n✅ All emails sent successfully!")
+        print(f"📨 Sending for row {i + 1}...")
+        sent = send_confirmation_email(email, company, name)
+        df_all.at[i, "Email Sent"] = "Yes" if sent else "No"
+
+        delay = random.randint(5, 10)
+        print(f"⏳ Waiting {delay}s before next...")
+        time.sleep(delay)
+
+    # Save updated full DataFrame back
+    df_all.to_excel(file_path, index=False)
+    print("\n✅ Script finished and Excel updated.")
 
 if __name__ == "__main__":
     run_app()
